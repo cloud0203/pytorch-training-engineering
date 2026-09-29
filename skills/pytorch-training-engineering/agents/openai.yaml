@@ -1,0 +1,6 @@
+interface:
+  display_name: "PyTorch 训练工程"
+  short_description: "构建配置驱动的 PyTorch 训练工程，覆盖目录、日志、多卡、恢复与验收"
+  default_prompt: "使用 $pytorch-training-engineering，先只读检查当前项目，给出拟修改文件、功能和验证范围，等待我确认后再执行。"
+policy:
+  allow_implicit_invocation: false

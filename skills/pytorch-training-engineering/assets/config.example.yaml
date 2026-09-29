@@ -1,0 +1,100 @@
+# 设计示例：供生成新项目时裁剪和适配，不能直接传给已有训练脚本。
+# 相对路径以生成后 config/experiment.yaml 的目录为基准。
+# 示例超参数仅为起点；所有保留字段都必须由生成代码实现和校验。
+schema_version: 1
+
+experiment:
+  name: regression_baseline
+  run_id: null  # 新训练由 rank 0 创建并广播；resume 从 checkpoint 恢复
+  logs_root: ../logs
+  weight_root: ../weight
+
+reproducibility:
+  seed: 42
+  deterministic: false
+
+runtime:
+  device: cuda
+  distributed: auto  # 根据 torchrun 环境；普通 python 为单进程
+  precision: fp32  # fp32 / fp16 / bf16，检查设备能力
+  compile: false
+  find_unused_parameters: false  # 存在未参与反传的参数时需调整
+
+data:
+  root: ../datasets
+  split_file: ../datasets/splits.json
+  cache_dir: ../cache
+  batch_size_per_device: 8
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2  # num_workers=0 时不向 DataLoader 传入
+  train_drop_last: false
+  normalization: train_only
+
+model:
+  name: task_model  # 实现时替换为项目实际模型名称
+  params: {}       # 由读取到的模型接口填入
+
+loss:
+  name: mse
+  space: normalized
+  reduction: sample_mean  # 按任务明确分母，变长任务不能机械套用
+
+optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.0001
+  betas: [0.9, 0.999]
+
+scheduler:
+  name: warmup_cosine
+  interval: epoch
+  total_epochs: 100  # 包含 warmup；延长 epochs 不重启原周期
+  warmup_epochs: 5
+  warmup_start_factor: 0.1
+  min_lr: 0.000001
+  after_horizon: hold_min
+
+training:
+  epochs: 100
+  accumulation_steps: 1
+  grad_clip_norm: 1.0
+  ema:
+    enabled: false
+    decay: 0.999
+
+validation:
+  every_n_epochs: 1
+  monitor: val/rmse
+  mode: min
+  metric_space: physical
+  early_stopping:
+    enabled: false
+    patience: 20  # 验证次数，不是训练 batch 数
+    min_delta: 0.0
+
+logging:
+  tensorboard: true
+  step_every: 50
+  step_scope: rank0_local
+  separate_event_axes: true  # epoch/micro-step/optimizer-step 独立 Writer
+  visualize_every_n_epochs: 10
+  fixed_visual_sample_ids: []  # 启用可视化时选择并保存固定样本
+  timing: stage
+  peak_memory: true
+
+checkpoint:
+  save_last: true
+  save_best: true
+  every_n_epochs: 10
+  keep_periodic: 3
+  resume: null
+  init_from: null
+  strict_resume: true
+
+# 这些参数只约束显式请求的试跑；存在配置不表示自动启动。
+smoke:
+  max_epochs: 2
+  max_train_batches: 3
+  max_val_batches: 2
