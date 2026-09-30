@@ -5,9 +5,9 @@
 - 新项目默认提供 CPU/单 GPU/torchrun DDP 共用入口；硬件或模型不支持的组合明确拒绝。
 - 写明配置覆盖优先级，例如代码默认值 < 配置 < CLI；尽早检测未知字段、错误类型、范围和冲突。
 - batch_size_per_device 表示每进程 batch；记录 world_size、accumulation_steps 和有效全局 batch。变长任务另记录有效元素数。
-- 明确训练上限为 epochs 或 max_optimizer_steps；二者同时出现时校验优先级。
+- 主训练上限使用显式预算单位和数值，避免 epochs 与 step 上限含糊并存；具体选择、计数和迁移见 [训练预算与实验可比性](training-budget.md)。新消融实验优先固定有效全局 batch 与成功更新数，用户指定的 epoch 配方仍可保留。
 - resume、init-from 互斥。设备不可用、数据为空、字段缺失、输出目录冲突在昂贵计算前报错。
-- 启动摘要包含模型总参数/可训练参数、数据规模、精度、损失、主指标、LR、设备及输出路径。
+- 启动摘要包含模型总参数/可训练参数、数据规模、精度、损失、主指标、LR、设备、输出路径，以及每卡 batch、数据并行大小、累积次数、实际 loader 长度、名义有效 batch、预算和预计更新数。
 
 ## 数据与任务接口
 
@@ -24,7 +24,7 @@
 - 无项目约定时可用 AdamW 作为起点；SGD 等按需添加。参数来自配置，记录参数组名称和 LR。
 - bias/norm 是否 weight decay 由任务和模型决定，不静默改变已有配方。
 - 调度器明确 interval：epoch、成功的 optimizer-step 或 validation-metric。Plateau 在对应验证后推进；step 调度器在成功更新后推进。
-- warmup 与主调度统一定义总周期是否含 warmup、初始 LR、终点和越界行为。恢复时不隐式重启周期。
+- warmup 与主调度使用同一明确单位，定义总周期是否含 warmup、初始 LR、终点和越界行为。step 模式不因 batch 变化重算固定 horizon；恢复时不隐式重启周期。
 - FP32、FP16、BF16 显式选择并检查设备支持，不静默更换。FP16 常需 GradScaler，BF16 通常不需；按实际版本和设备实现。
 - autocast 覆盖适合的算子；敏感归约、物理空间还原等必要时用 FP32 或更高精度。验证关闭梯度。
 - 梯度裁剪在 unscale 后执行，记录裁剪前范数；非有限梯度按明确策略处理。
@@ -66,11 +66,13 @@
 | train_step_local/ | rank 0 本地 batch 目标与损失项，以明确的 micro-step 为轴 |
 | train_epoch/、val/ | 全局聚合指标、单位、分母 |
 | optim/ | 各参数组 LR、梯度范数、scaler scale、跳过更新次数 |
+| progress/ | micro_step、attempted_updates、optimizer_step、samples_seen/optimized、按需 tokens_seen/optimized、预算完成量 |
 | time/ | 准备、训练、验证、保存、日志开销及运行总耗时 |
 | perf/ | 有效 samples/s 或 tokens/s、每 rank 峰值 allocated/reserved 显存 |
 | visual/ | 固定样本 ID 的预测、真值和误差图 |
 
 - 控制台、文本、JSONL、TensorBoard 使用同源指标，记录频率可配置。TensorBoard 可关闭，关闭时不强制依赖导入成功。
+- 验证、保存和正式对比曲线使用声明的预算轴；step 模式按成功更新数触发并去重，正常结束补一次最终验证。epoch 只是数据遍历进度，不能代替实际更新计数。
 - 不为每个日志值重复计算完整指标。float(cuda_tensor)、item()、频繁打印也可能同步，降低热路径开销。
 - 低成本计时使用 perf_counter，阶段边界必要时同步 CUDA；精细 GPU 时间用 CUDA events 或 profiler，不默认每 batch synchronize。
 - DataLoader 的 next 等待是主进程阻塞，不是全部 I/O 时间；GPU 与预取可重叠，分项不能直接解释为不重叠占比。
@@ -81,14 +83,14 @@
 
 ## checkpoint 与恢复
 
-基础 checkpoint 包含：format_version、run_id、模型 state_dict、重建配置、输入输出语义、归一化/预处理、数据身份、optimizer、scheduler、scaler、已完成 epoch、micro_step、成功 optimizer_step、best 值及 epoch、各 rank RNG、world_size。启用 EMA/early stopping 时保存其状态；独立 generator、sampler 等有状态组件需保存或可确定性重建。
+基础 checkpoint 包含：format_version、run_id、模型 state_dict、重建配置、输入输出语义、归一化/预处理、数据身份、optimizer、scheduler、scaler、数据 epoch、micro_step、attempted/skipped_updates、成功 optimizer_step、seen/optimized 数据量、主预算与调度 horizon、best 值及其 step/epoch、各 rank RNG、world_size。启用 EMA/early stopping 时保存其状态；独立 generator、sampler 等有状态组件需保存或可确定性重建。
 
 - last 用于恢复，best 按指定验证指标保存；周期存档和保留数量按需配置。临时文件位于目标文件同一文件系统，完成后原子替换，失败不覆盖旧文件。
 - 推理可独立取得模型构建和预处理信息，不依赖训练时绝对路径、完整 Dataset 对象或 pickle 化模型对象。
 - 不加载未知来源的不可信完整 pickle；完整恢复按可信本地产物处理，加载参数匹配 PyTorch 版本。
 - resume 恢复训练状态；init-from 只加载指定权重并新建实验，重新建立 optimizer、scheduler、scaler、step、best 和随机状态。部分加载报告缺失/多余参数。
 - 兼容性矩阵：模型、特征语义、划分、归一化、损失变化通常拒绝严格续训；日志频率等可变；batch/world_size/精度变化若允许，标为非严格延续，不声称轨迹一致。
-- 默认承诺 epoch 边界恢复。任意 step 恢复需处理 sampler 游标、数据预取、累积梯度等，未实现就明确不支持。
+- 恢复粒度必须与存档频率匹配。step 模板要求完整累积窗口结束后的 optimizer-step 恢复，额外保存数据游标、顺序/增强状态和事件阈值；仍只支持 epoch 恢复的工程需单独保留可恢复存档，不能把中途权重假称为完整恢复点。细节见 [预算规范](training-budget.md#step-存档与恢复)。
 - RNG 在会消耗随机数的初始化完成后、下一个训练数据迭代前恢复并验证顺序；seed 本身不能代替状态恢复。
 - TensorBoard purge_step 按实际事件 step 设计。混用 epoch 与 micro-step 时，使用独立 event 子目录/Writer 各自清理，或统一坐标轴；一个 purge_step 不能正确处理多种量级的横轴。
 - JSONL、summary 与恢复点对齐；延长训练的 scheduler 周期政策写入文档。

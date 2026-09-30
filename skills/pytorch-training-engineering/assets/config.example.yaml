@@ -1,7 +1,7 @@
 # 设计示例：供生成新项目时裁剪和适配，不能直接传给已有训练脚本。
 # 相对路径以生成后 config/experiment.yaml 的目录为基准。
 # 示例超参数仅为起点；所有保留字段都必须由生成代码实现和校验。
-schema_version: 1
+schema_version: 2
 
 experiment:
   name: regression_baseline
@@ -49,23 +49,30 @@ optimizer:
 
 scheduler:
   name: warmup_cosine
-  interval: epoch
-  total_epochs: 100  # 包含 warmup；延长 epochs 不重启原周期
-  warmup_epochs: 5
+  interval: optimizer_step
+  total_steps: 10000  # 成功更新数，包含 warmup；不根据 batch 重新推导
+  warmup_steps: 500
   warmup_start_factor: 0.1
   min_lr: 0.000001
   after_horizon: hold_min
 
 training:
-  epochs: 100
-  accumulation_steps: 1
+  budget:
+    unit: optimizer_step
+    limit: 10000  # 成功更新后判断；到达即停止，不凑整 epoch
+  target_effective_batch_size: 32  # 启动时校验每卡 batch × 数据并行进程 × 累积次数
+  accumulation_steps: 4
+  accumulation_tail: flush  # 数据遍历末尾提交不足窗口，记录实际窗口样本数
+  max_consecutive_skipped_updates: 100  # 保护上限；命中视为失败而非预算完成
   grad_clip_norm: 1.0
   ema:
     enabled: false
     decay: 0.999
 
 validation:
-  every_n_epochs: 1
+  interval: optimizer_step
+  every_n_steps: 250
+  at_end: true  # 正常终止最终验证，已在相同步验证时去重
   monitor: val/rmse
   mode: min
   metric_space: physical
@@ -76,10 +83,12 @@ validation:
 
 logging:
   tensorboard: true
-  step_every: 50
+  interval: optimizer_step
+  every_n_steps: 50
+  comparison_axes: [optimizer_step, samples_seen, elapsed_seconds]
   step_scope: rank0_local
   separate_event_axes: true  # epoch/micro-step/optimizer-step 独立 Writer
-  visualize_every_n_epochs: 10
+  visualize_every_n_validations: 4
   fixed_visual_sample_ids: []  # 启用可视化时选择并保存固定样本
   timing: stage
   peak_memory: true
@@ -87,7 +96,10 @@ logging:
 checkpoint:
   save_last: true
   save_best: true
-  every_n_epochs: 10
+  interval: optimizer_step
+  every_n_steps: 1000
+  at_end: true
+  resume_granularity: optimizer_step  # 需实现数据游标/随机状态恢复，不能只记录 epoch
   keep_periodic: 3
   resume: null
   init_from: null
@@ -98,3 +110,7 @@ smoke:
   max_epochs: 2
   max_train_batches: 3
   max_val_batches: 2
+
+# 默认有效 batch=32 对应：单卡 × 每卡 8 × 累积 4。
+# 4 卡保持同一协议时使用累积 1；每卡改为 4 且使用 4 卡时使用累积 2。
+# 无法满足 target_effective_batch_size 时明确报错，不自动改 LR 或预算。

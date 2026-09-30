@@ -6,7 +6,7 @@ A Chinese-language agent skill for building readable, configuration-driven PyTor
 
 这个 skill 为编码助手提供训练工程的工作流程、目录规范和正确性约束：先读取项目，形成方案，等待确认，再实现用户选定的能力。仓库交付的是 skill、参考规范和配置模板，不包含可直接训练任意模型的通用 Trainer。
 
-[快速开始](#快速开始) · [能力范围](#能力范围) · [确认机制](#确认机制) · [仓库结构](#仓库结构) · [发布到 GitHub](docs/publishing.md)
+[快速开始](#快速开始) · [能力范围](#能力范围) · [训练预算与实验比较](#训练预算与实验比较) · [确认机制](#确认机制) · [发布到 GitHub](docs/publishing.md)
 
 ## 适用场景
 
@@ -66,6 +66,7 @@ test ! -e "$HOME/.agents/skills/pytorch-training-engineering" && \
 | 数据 | 数据契约、固定验证协议、防泄漏、训练集拟合预处理 |
 | 训练循环 | 显式 train/validate、可替换模型和损失、合理的 DataLoader 配置 |
 | 优化 | 可配置优化器、warmup/调度器语义、梯度裁剪、按需累积 |
+| 实验预算 | 成功更新数/数据量/epoch 的选择、有效全局 batch、统一调度与评估横轴 |
 | 精度与设备 | CPU、单 GPU、DDP；FP32/FP16/BF16 按设备和模型适配 |
 | 指标 | 全局统计、正确分母、分通道/区域指标、本地 step 与全局 epoch 区分 |
 | 观测 | TensorBoard、文本与 JSONL、阶段耗时、吞吐量、峰值显存 |
@@ -74,6 +75,52 @@ test ! -e "$HOME/.agents/skills/pytorch-training-engineering" && \
 | 验收 | 静态检查、指标测试、有界试跑、恢复与多卡一致性，按授权执行 |
 
 EMA、early stopping、compile、激活检查点和 FSDP 等只在项目需要时实现；保留的配置项必须实际生效或明确报错。
+
+## 训练预算与实验比较
+
+**相同 epoch 不等于相同更新次数，相同 step 也不等于相同数据量。**
+
+例如训练集为 12,800 个样本，没有尾批、重复采样或 AMP 跳步时：
+
+| 有效全局 batch | 每 epoch 更新数 | 10 epoch 更新数 | 10 epoch 样本暴露量 |
+| --- | --- | --- | --- |
+| 32 | 400 | 4,000 | 128,000 |
+| 64 | 200 | 2,000 | 128,000 |
+
+若改成两组都训练 4,000 step，batch=64 的实验会处理两倍数据。因此先确定要控制什么：
+
+- **模型/损失消融**：优先固定有效全局 batch 和成功更新数。显存不足可降低每卡 batch、增加梯度累积，但批内交互等模型行为仍需核对。
+- **研究 batch 本身**：明确固定样本/token 总量还是固定更新数，报告另一项和耗时；必要时分别比较。
+- **复现既有配方**：可继续使用 epoch，但记录实际更新次数、采样和调度政策。
+
+配置模板 schema 2 默认采用以下协议，数值是示例，需要按任务选定：
+
+```yaml
+training:
+  budget:
+    unit: optimizer_step
+    limit: 10000
+  target_effective_batch_size: 32
+  accumulation_steps: 4  # 默认单卡、每卡 batch=8
+scheduler:
+  interval: optimizer_step
+  total_steps: 10000
+  warmup_steps: 500
+validation:
+  interval: optimizer_step
+  every_n_steps: 250
+  at_end: true
+checkpoint:
+  interval: optimizer_step
+  every_n_steps: 1000
+  resume_granularity: optimizer_step
+```
+
+这段是完整模板的节选，不是独立可运行配置。4 卡、每卡 batch=8 时，将累积次数改为 1 可保持同样的名义有效 batch；无法满足目标时要求明确报错，不自动改变 LR 或预算。
+
+调度器只随成功更新推进，验证和保存事件去重，记录更新数、样本/token 量与耗时。step checkpoint 可能位于 epoch 中间，生成工程必须实现对应的数据游标和随机状态恢复，或明确保留 epoch-only 恢复方案，不能只存 epoch+1。
+
+完整的预算选择、计数、尾批、跳步和迁移规则见 [训练预算与实验可比性](skills/pytorch-training-engineering/references/training-budget.md)。参考了 [timm 的 update 调度](https://github.com/huggingface/pytorch-image-models/blob/main/train.py) 和 [Hugging Face 的 max_steps 配置](https://huggingface.co/docs/transformers/main/en/main_classes/trainer)；本仓库仍提供规范和模板，并未加入实际训练器。
 
 ## 确认机制
 
@@ -143,6 +190,15 @@ your-project/
 不要启动正式训练，也不要使用 GPU。
 ```
 
+**比较不同显存配置：**
+
+```text
+使用 $pytorch-training-engineering，比较每卡 batch=8 和 batch=4。
+固定有效全局 batch=32、成功更新 10000 次、warmup 500 次，
+每 250 次更新验证，按设备数量推导并核对梯度累积次数。
+先说明预算、尾批和续训方案，等我确认；不要启动训练。
+```
+
 ## 仓库结构
 
 ```text
@@ -156,6 +212,7 @@ pytorch-training-engineering/
 │   ├── references/
 │   │   ├── project-layout.md
 │   │   ├── training-contract.md
+│   │   ├── training-budget.md
 │   │   └── acceptance.md
 │   └── assets/
 │       ├── config.example.yaml
@@ -178,7 +235,7 @@ python -m pip install -r requirements-dev.txt
 python scripts/validate_skill.py
 ```
 
-检查 frontmatter、元数据、显式调用策略、YAML、Markdown 本地文件链接和可移植性。它不访问外部链接、不验证 Markdown 锚点、不启动训练，也不证明生成训练工程的运行正确性。GitHub Actions 会运行同一校验。
+检查 frontmatter、元数据、显式调用策略、YAML、Markdown 本地文件链接、可移植性，以及 schema 2 示例中的预算/调度/事件单位一致性。它不访问外部链接、不验证 Markdown 锚点、不启动训练，也不证明生成训练工程的运行正确性。GitHub Actions 会运行同一校验。
 
 ## 贡献与发布
 

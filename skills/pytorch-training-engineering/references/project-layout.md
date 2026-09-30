@@ -50,7 +50,7 @@ project/
 │   └── <run_id>/
 │       ├── last.pt
 │       ├── best.pt
-│       └── epoch_XXXX.pt      # 仅启用周期存档时生成
+│       └── step_XXXX.pt       # 周期存档按预算轴命名；epoch 模式可用 epoch_XXXX.pt
 ├── tests/
 ├── pyproject.toml             # 或沿用 requirements.txt 等依赖方案
 ├── README.md                  # 环境、配置、命令和指标定义
@@ -81,11 +81,11 @@ project/
 | 产物 | 必要内容 |
 | --- | --- |
 | config.resolved.yaml | 合并及 CLI 覆盖后的配置、原始配置来源 |
-| metadata.json | run_id、命令、UTC 开始时间、Python/PyTorch/CUDA/cuDNN、GPU、world size、可取得的代码版本、确定性设置 |
+| metadata.json | run_id、命令、UTC 开始时间、Python/PyTorch/CUDA/cuDNN、GPU、数据并行大小、每卡/有效 batch、累积、预算单位与目标、调度 horizon、尾批政策、可取得的代码版本、确定性设置 |
 | data_manifest.json | 数据身份、划分、样本数、字段含义、预处理参数 |
-| metrics.jsonl | epoch、micro-step、optimizer-step、指标、分母/覆盖率、LR、耗时；无效指标写 null |
+| metrics.jsonl | 数据 epoch、micro-step、尝试/成功/跳过更新数、seen/optimized 数据量、指标、分母/覆盖率、LR、耗时；无效指标写 null |
 | train.log | 带时间和 rank 的日志；错误和 traceback 进入文件或明确的 launcher stderr 日志 |
-| summary.json | 状态、最好指标及 epoch、checkpoint 路径、耗时、终止原因 |
+| summary.json | 状态、最好指标及 step/epoch、终点指标、目标/实际预算与超额量、checkpoint 路径、耗时、终止原因 |
 | checkpoint | 完整恢复状态；可独立取得推理所需结构与预处理 |
 
 长期训练推荐追加 JSONL，避免每轮重写全部历史。恢复到旧 checkpoint 时，将之后的日志记录显式截断或归档，不混合旧尾部和新记录。

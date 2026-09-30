@@ -22,6 +22,69 @@ def read_mapping(path):
     return value
 
 
+def positive_integer(value):
+    return type(value) is int and value > 0
+
+
+def check_example_config(config):
+    """Validate this repository's step-budget example, not arbitrary trainers."""
+    require(config.get("schema_version") == 2, "Example schema must be version 2")
+    training = config["training"]
+    budget = training["budget"]
+    require(budget["unit"] == "optimizer_step", "Example budget must use updates")
+    limit = budget["limit"]
+    require(positive_integer(limit), "Budget limit must be a positive integer")
+    require("epochs" not in training, "Example mixes epoch and update budgets")
+    for field in (
+        "accumulation_steps",
+        "target_effective_batch_size",
+        "max_consecutive_skipped_updates",
+    ):
+        require(positive_integer(training[field]), f"Invalid training.{field}")
+    require(training["accumulation_tail"] == "flush", "Example must flush tails")
+    batch = config["data"]["batch_size_per_device"]
+    require(positive_integer(batch), "Invalid per-device batch")
+    require(
+        batch * training["accumulation_steps"]
+        == training["target_effective_batch_size"],
+        "Example's default single-process effective batch does not match target",
+    )
+
+    scheduler = config["scheduler"]
+    require(
+        scheduler["interval"] == "optimizer_step",
+        "Example scheduler must use successful updates",
+    )
+    require(
+        positive_integer(scheduler["total_steps"])
+        and scheduler["total_steps"] == limit,
+        "Fresh example scheduler horizon must match the update budget",
+    )
+    warmup = scheduler["warmup_steps"]
+    require(
+        type(warmup) is int and 0 <= warmup < limit,
+        "Warmup must be an integer below the total update budget",
+    )
+    require(
+        not {"total_epochs", "warmup_epochs"}.intersection(scheduler),
+        "Example scheduler contains legacy epoch fields",
+    )
+    for name in ("validation", "logging", "checkpoint"):
+        section = config[name]
+        require(section["interval"] == "optimizer_step", f"Wrong {name} unit")
+        require(
+            positive_integer(section["every_n_steps"]),
+            f"Invalid {name} frequency",
+        )
+        require("every_n_epochs" not in section, f"Legacy epoch field in {name}")
+    for name in ("validation", "checkpoint"):
+        require(config[name]["at_end"] is True, f"Missing final {name} event")
+    require(
+        config["checkpoint"]["resume_granularity"] == "optimizer_step",
+        "Step checkpoints require an explicit compatible recovery contract",
+    )
+
+
 def check_markdown(path, root):
     content = path.read_text(encoding="utf-8")
     require("[TODO:" not in content, f"Unfinished scaffold: {path}")
@@ -60,6 +123,7 @@ def validate(root):
         "agents/openai.yaml",
         "references/project-layout.md",
         "references/training-contract.md",
+        "references/training-budget.md",
         "references/acceptance.md",
         "assets/config.example.yaml",
         "assets/standalone-prompt.md",
@@ -103,8 +167,12 @@ def validate(root):
         check_markdown(path, root)
     for path in skill.rglob("*.yaml"):
         read_mapping(path)
+    check_example_config(read_mapping(skill / "assets/config.example.yaml"))
     read_mapping(root / ".github/workflows/validate.yml")
-    print(f"PASS: {len(documents)} documents, YAML, metadata and local file links")
+    print(
+        f"PASS: {len(documents)} documents, YAML, metadata, local links "
+        "and example budget consistency"
+    )
     print("No training, GPU calls or network requests were performed.")
 
 
@@ -116,7 +184,7 @@ def main():
     args = parser.parse_args()
     try:
         validate(args.root.resolve())
-    except (ValueError, OSError, yaml.YAMLError) as error:
+    except (ValueError, KeyError, TypeError, OSError, yaml.YAMLError) as error:
         parser.exit(1, f"FAIL: {error}\n")
 
 
