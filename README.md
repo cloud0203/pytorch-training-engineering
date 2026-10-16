@@ -69,7 +69,7 @@ test ! -e "$HOME/.agents/skills/pytorch-training-engineering" && \
 | 实验预算 | 成功更新数/数据量/epoch 的选择、有效全局 batch、统一调度与评估横轴 |
 | 精度与设备 | CPU、单 GPU、DDP；FP32/FP16/BF16 按设备和模型适配 |
 | 指标 | 全局统计、正确分母、分通道/区域指标、本地 step 与全局 epoch 区分 |
-| 观测 | TensorBoard、文本与 JSONL、阶段耗时、吞吐量、峰值显存 |
+| 观测 | TensorBoard、文本与 JSONL、阶段耗时、吞吐量、峰值显存；权重目录同步日志、CSV 和最终 loss 图 |
 | 恢复 | best/last、原子保存、完整训练状态、resume 与 init-from 分离 |
 | 复现 | RNG、sampler/worker 状态、环境元信息和明确复现边界 |
 | 验收 | 静态检查、指标测试、有界试跑、恢复与多卡一致性，按授权执行 |
@@ -159,11 +159,32 @@ your-project/
 ├── metrics.py
 ├── optim.py
 ├── logs/<run_id>/            # 配置、日志、指标、TensorBoard
-├── weight/<run_id>/          # best.pt、last.pt、周期存档
+├── weight/<run_id>/          # 权重、文本日志、数值历史和 loss 曲线
 └── tests/
 ```
 
 原始数据由配置指向外部路径，或放入独立的 `datasets/`；`data/` 用于代码。日志与权重通过相同 `run_id` 关联。已有工程保留等价目录，小项目可以合并工具文件。详见 [目录与产物约定](skills/pytorch-training-engineering/references/project-layout.md)。
+
+### 权重目录中的日志与曲线
+
+生成的训练工程需要在 `weight/<run_id>/` 保存以下文件，复制权重目录后即可查看训练过程：
+
+```text
+weight/<run_id>/
+├── best.pt
+├── last.pt
+├── train.log          # 时间、每轮 train loss、实际 val loss、LR、耗时
+├── summary.txt        # 总耗时、最佳/最终结果、停止原因、绘图状态
+├── loss_history.csv   # 保留实际 epoch/step 和原始 loss 的数值历史
+├── loss.png           # 训练结束自动绘制：线性纵轴
+└── loss_log.png       # 训练结束自动绘制：对数纵轴
+```
+
+文本和 CSV 与 `logs/` 使用同一份全局指标事件，训练过程中及时写入，不依赖 TensorBoard。按 step 训练仍记录每个完整 epoch 的 loss，最后不足一轮时标记 partial_epoch；没有发生验证的位置留空，不补造 val loss。
+
+正常训练结束或 early stopping 后生成两张图。横轴跟随训练预算，各条曲线使用自己的真实观测位置；对数图保留原始 loss，只改变纵轴刻度。零、负值和非有限值在对数图中屏蔽并标注，CSV 不因绘图而改写。没有正值时输出明确说明图。
+
+续训需对齐有效历史、处理旧尾部并在结束后重绘；训练工程还应提供从 CSV 独立重绘的入口。详细字段、计时口径和边界处理见 [权重目录日志与 loss 曲线](skills/pytorch-training-engineering/references/training-artifacts.md)。本仓库提供生成规范与配置示例，不包含真实训练历史或已经生成的实验图。
 
 ## 使用示例
 
@@ -213,6 +234,7 @@ pytorch-training-engineering/
 │   │   ├── project-layout.md
 │   │   ├── training-contract.md
 │   │   ├── training-budget.md
+│   │   ├── training-artifacts.md
 │   │   └── acceptance.md
 │   └── assets/
 │       ├── config.example.yaml
@@ -235,7 +257,7 @@ python -m pip install -r requirements-dev.txt
 python scripts/validate_skill.py
 ```
 
-检查 frontmatter、元数据、显式调用策略、YAML、Markdown 本地文件链接、可移植性，以及 schema 2 示例中的预算/调度/事件单位一致性。它不访问外部链接、不验证 Markdown 锚点、不启动训练，也不证明生成训练工程的运行正确性。GitHub Actions 会运行同一校验。
+检查 frontmatter、元数据、显式调用策略、YAML、Markdown 本地文件链接、可移植性，以及 schema 2 示例中的预算/调度/事件单位和权重目录产物配置。它不访问外部链接、不验证 Markdown 锚点、不启动训练或生成实验图，也不证明生成训练工程的运行正确性。GitHub Actions 会运行同一校验。
 
 ## 贡献与发布
 

@@ -7,7 +7,6 @@ from urllib.parse import unquote, urlsplit
 
 import yaml
 
-
 SKILL_NAME = "pytorch-training-engineering"
 
 
@@ -24,6 +23,42 @@ def read_mapping(path):
 
 def positive_integer(value):
     return type(value) is int and value > 0
+
+
+def check_weight_artifacts(logging):
+    """Keep the example's portable logs and final loss plots enabled."""
+    artifacts = logging.get("weight_artifacts")
+    require(isinstance(artifacts, dict), "Missing weight artifact configuration")
+    for key in ("enabled", "record_epoch_loss", "flush_every_event"):
+        require(artifacts.get(key) is True, f"Weight artifacts require {key}")
+    plots = artifacts.get("loss_plots")
+    require(isinstance(plots, dict), "Missing final loss plot configuration")
+    require(plots.get("at_end") is True, "Loss plots must run at normal end")
+    require(plots.get("x_axis") == "budget", "Loss plots must follow budget axis")
+    require(plots.get("log_scale") == "log", "Loss plots must use a log y-axis")
+    require(
+        plots.get("nonpositive") == "mask_and_annotate",
+        "Nonpositive loss must be masked and annotated, not altered",
+    )
+    filenames = []
+    for section, key, suffix in (
+        (artifacts, "text_log", ".log"),
+        (artifacts, "history_csv", ".csv"),
+        (artifacts, "summary_text", ".txt"),
+        (plots, "linear_filename", ".png"),
+        (plots, "log_filename", ".png"),
+    ):
+        value = section.get(key)
+        require(
+            isinstance(value, str)
+            and value == value.strip()
+            and "/" not in value
+            and "\\" not in value
+            and Path(value).suffix == suffix,
+            f"{key} must be a filename inside the weight run directory",
+        )
+        filenames.append(value)
+    require(len(set(filenames)) == len(filenames), "Artifact filenames collide")
 
 
 def check_example_config(config):
@@ -83,6 +118,7 @@ def check_example_config(config):
         config["checkpoint"]["resume_granularity"] == "optimizer_step",
         "Step checkpoints require an explicit compatible recovery contract",
     )
+    check_weight_artifacts(config["logging"])
 
 
 def check_markdown(path, root):
@@ -124,6 +160,7 @@ def validate(root):
         "references/project-layout.md",
         "references/training-contract.md",
         "references/training-budget.md",
+        "references/training-artifacts.md",
         "references/acceptance.md",
         "assets/config.example.yaml",
         "assets/standalone-prompt.md",
@@ -171,7 +208,7 @@ def validate(root):
     read_mapping(root / ".github/workflows/validate.yml")
     print(
         f"PASS: {len(documents)} documents, YAML, metadata, local links "
-        "and example budget consistency"
+        "and example budget/artifact consistency"
     )
     print("No training, GPU calls or network requests were performed.")
 

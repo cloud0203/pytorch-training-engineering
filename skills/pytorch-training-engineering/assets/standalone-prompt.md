@@ -30,7 +30,7 @@ scripts/：单卡、多卡、续训、初始化和评估命令封装。
 utils/：配置、分布式、日志、checkpoint、随机数工具；小项目可合并。
 losses.py、metrics.py、optim.py：按规模拆分，不创建无用空壳。
 logs/<run_id>/：配置快照、环境元信息、数据清单、train.log、metrics.jsonl、summary.json、tensorboard/、必要图像。
-weight/<run_id>/：last.pt、best.pt、按需周期存档。
+weight/<run_id>/：last.pt、best.pt、按需周期存档，以及 train.log、summary.txt、loss_history.csv、loss.png、loss_log.png。日志和图表须实际保存在此目录，不能仅用指向 logs/ 的链接替代。
 tests/、依赖文件、README.md、.gitignore。
 已有工程保持其等价目录，不强制搬迁。原始数据和缓存用配置指向外部路径，必要时用 datasets/、cache/。logs 与 weight 使用同一 run_id；新实验禁止覆盖旧产物。
 
@@ -61,6 +61,10 @@ train sampler 每轮 set_epoch，说明补齐/drop_last 策略及实际处理数
 按预算轴触发全局指标记录和验证；用跨阈值事件而非仅取模，AMP 跳步与恢复不重复触发事件，正常结束最终验证去重。记录更新数、处理样本/token 量和耗时三个比较轴。报告终点指标与 best 对应的预算位置，对齐验证机会；严格固定预算比较默认关闭 early stopping。
 记录数据准备、DataLoader 阻塞、训练、验证、保存、总耗时、吞吐量和峰值显存。注明计时边界和单位，CUDA 阶段边界按需同步，不默认每 batch 同步；loader 等待不等于全部 I/O 时间，各 rank 逐项最大值不能直接相加。
 可视化使用固定验证样本 ID，频率可控。metadata 保存启动命令、环境、设备、代码版本（可取得时）、数据身份、随机设置。summary 保存 best、耗时、状态及终止原因。
+weight/<run_id>/train.log 及时记录带时区的开始/结束时间、每轮全局加权 train loss、真实验证事件的 val loss、LR、epoch、optimizer_step、阶段和累计运行秒数；同时由同一指标事件生成 loss_history.csv，不解析格式化日志反推数值。完整 epoch 和最终 partial_epoch 区分，未验证的位置留空，验证发生在哪个 step 就记录在哪里，不挪用旧值或填 0。中途恢复需恢复整轮 loss 分子/分母和计时，否则标为恢复后的局部窗口。
+正常训练结束及 early stopping 后，先完成历史 flush 和最终存档，再自动生成权重目录下的 loss.png（线性纵轴）和 loss_log.png（原始 loss 的对数纵轴），最后写 summary.txt，记录 best/最终结果、累计运行时间、停止原因和绘图状态。主横轴跟随预算，训练/验证使用真实观测位置，注明损失定义和空间，不默认平滑。
+对数图中零、负值和非有限值仅在绘图副本中屏蔽并断开线段，标注排除数及原因，不取绝对值、不加 epsilon、不改写原始 loss。线性图保留有限零/负值。无正值或无历史时输出明确说明图，不能造数据；缺少验证时只绘制 train 并注明。使用无界面后端并关闭 figure，提供仅从 CSV 重绘的入口，不加载模型或启动训练。
+仅 rank 0 写共享产物；续训对齐并去重各类历史，依据保存的事件游标和数据消费位置处理旧尾部，不只凭 step 删除合法同一步事件。旧图需标记过期或归档，结束后按有效全历史重绘；绘图失败写入日志与摘要，不覆盖原训练错误或冒称成功。
 
 七、checkpoint 与复现
 原子保存 last/best，按需周期存档及数量限制。checkpoint 包含模型、构建配置、预处理、数据身份、优化器、调度器、scaler、epoch、两类 step、best、各 rank RNG、world_size，以及启用的 EMA/early stopping 等状态。

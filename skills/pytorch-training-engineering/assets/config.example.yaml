@@ -92,6 +92,20 @@ logging:
   fixed_visual_sample_ids: []  # 启用可视化时选择并保存固定样本
   timing: stage
   peak_memory: true
+  weight_artifacts:  # 产物位于 experiment.weight_root/<run_id>/，不依赖 TensorBoard
+    enabled: true
+    text_log: train.log
+    history_csv: loss_history.csv
+    summary_text: summary.txt
+    record_epoch_loss: true  # step 预算也记录完整轮次及最终 partial epoch
+    flush_every_event: true
+    loss_plots:
+      at_end: true
+      linear_filename: loss.png
+      log_filename: loss_log.png
+      x_axis: budget  # 跟随训练预算，保留每条曲线实际观测位置
+      log_scale: log  # 原始 loss 的对数纵轴，不改写历史值
+      nonpositive: mask_and_annotate
 
 checkpoint:
   save_last: true

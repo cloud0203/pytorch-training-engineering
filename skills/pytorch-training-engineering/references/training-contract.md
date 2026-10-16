@@ -80,6 +80,7 @@
 - 显存峰值按阶段或 epoch 重置采集，首轮初始化/编译/缓存开销与稳定吞吐分开解释。
 - 写明 epoch 总耗时是否含验证、保存、日志。checkpoint 无法包含自身最终写入耗时，完整耗时写侧文件。
 - ETA 和累计耗时区分当前会话与此前训练，不把停机时长当成训练计算耗时。
+- 每轮全局 train loss、真实验证事件、LR 和耗时及时写入 weight/<run_id>/train.log 与 loss_history.csv；正常结束输出 summary.txt、loss.png 和 loss_log.png。按 [权重目录日志与 loss 曲线](training-artifacts.md) 处理 partial epoch、缺失验证、非正 loss、续训去重与独立重绘。关闭 TensorBoard 不影响这些文件产出。
 
 ## checkpoint 与恢复
 

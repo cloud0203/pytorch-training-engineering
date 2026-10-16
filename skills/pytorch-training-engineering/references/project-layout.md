@@ -50,6 +50,11 @@ project/
 │   └── <run_id>/
 │       ├── last.pt
 │       ├── best.pt
+│       ├── train.log          # 每轮 loss、验证事件、时间与进度
+│       ├── summary.txt        # 最佳/最终结果、总耗时、结束状态
+│       ├── loss_history.csv   # 可独立重绘的原始数值历史
+│       ├── loss.png           # 训练结束：线性纵轴
+│       ├── loss_log.png       # 训练结束：对数纵轴
 │       └── step_XXXX.pt       # 周期存档按预算轴命名；epoch 模式可用 epoch_XXXX.pt
 ├── tests/
 ├── pyproject.toml             # 或沿用 requirements.txt 等依赖方案
@@ -71,6 +76,7 @@ project/
 
 - 新训练由 rank 0 创建唯一 run_id 并广播；显式 ID 已存在时拒绝覆盖。可采用 experiment_name + UTC 时间 + 短随机后缀。
 - logs/<run_id> 与 weight/<run_id> 一一对应；metadata 记录关联路径，checkpoint 包含重建必需的配置和预处理状态。
+- weight/<run_id> 同时保存可独立阅读的日志、CSV 和静态 loss 图，与 logs/ 采用同一指标事件来源；不能仅存权重或用指向 logs/ 的符号链接替代这些产物。详细口径见 [权重目录日志与 loss 曲线](training-artifacts.md)。
 - 配置相对路径相对配置文件目录；继承配置时明确路径基准。CLI 相对路径相对调用目录，进入训练前统一解析。
 - resume 默认继续原 run_id；若允许迁移目录，记录来源，不隐式分叉。init-from 创建新 run_id。
 - 日志与权重可以位于不同磁盘。支持多节点时说明共享文件系统前提；没有共享存储时实现分发与保存策略。
@@ -87,6 +93,10 @@ project/
 | train.log | 带时间和 rank 的日志；错误和 traceback 进入文件或明确的 launcher stderr 日志 |
 | summary.json | 状态、最好指标及 step/epoch、终点指标、目标/实际预算与超额量、checkpoint 路径、耗时、终止原因 |
 | checkpoint | 完整恢复状态；可独立取得推理所需结构与预处理 |
+| weight/<run_id>/train.log | 开始/结束时间、每轮全局 train loss、实际验证事件 val loss、LR、epoch/step、阶段与累计耗时 |
+| weight/<run_id>/summary.txt | 最佳/最终指标、目标/实际预算、总耗时、停止原因、绘图结果 |
+| weight/<run_id>/loss_history.csv | 同源原始指标、事件 ID、真实横轴位置和损失定义；缺失验证不填造数据 |
+| weight/<run_id>/loss.png、loss_log.png | 正常结束生成的线性/对数纵轴图；非正 loss 的处理明确标注 |
 
 长期训练推荐追加 JSONL，避免每轮重写全部历史。恢复到旧 checkpoint 时，将之后的日志记录显式截断或归档，不混合旧尾部和新记录。
 
